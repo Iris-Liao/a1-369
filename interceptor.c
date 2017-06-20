@@ -278,17 +278,19 @@ orig_exit_group(status);
  */
 asmlinkage long interceptor(struct pt_regs reg) {
 	long unsigned int syscall=reg.ax;
-	int isMonitored=check_pid_monitored(syscall,current->pid);//return an int=1/monitored;0-not monitored
+
 	if(table[syscall].monitored==2){    //all monitored, return directly
 		log_message(current->pid,syscall,reg.bx,reg.cx,reg.dx,reg.si,reg.di,reg.bp);//ax-system call
 		return table[syscall].f(reg);//f-original system call
-	}
-	else if(isMonitored){            //cuz check_pid_monitored cannot be applied to pid=0 situation,which means all pid are monitoed
+	}else{
+		int isMonitored=check_pid_monitored(syscall,current->pid);//return an int=1/monitored;0-not monitored
+	if(isMonitored){            //cuz check_pid_monitored cannot be applied to pid=0 situation,which means all pid are monitoed
 log_message(current->pid,syscall,reg.bx,reg.cx,reg.dx,reg.si,reg.di,reg.bp);//ax-system call
 		return table[syscall].f(reg);
 	}else{
 		return table[syscall].f(reg);//return original syscall without log message
 	}
+}
 return 0;// Just a placeholder, so it compiles with no warnings!
 }
 
@@ -355,16 +357,18 @@ return 0;// Just a placeholder, so it compiles with no warnings!
  }
  //2.release function
  asmlinkage long my_syscall_reslease_function(int syscall,int pid){
-	spin_lock(&calltable_lock);
- 	set_addr_rw((unsigned long) sys_call_table);
-	spin_lock(&pidlist_lock);
- 	destroy_list(syscall);
+	 table[syscall].intercepted=0;
+ 	spin_lock(&calltable_lock);
+ 	set_addr_rw((unsigned long)sys_call_table);//set syscall table writable
  	sys_call_table[syscall]=table[syscall].f;
- 	table[syscall].intercepted=0;
- 	table[syscall].monitored=0;
- 	table[syscall].f=NULL;
- 	set_addr_ro((unsigned long) sys_call_table);
+	table[syscall].intercepted=0;
+	table[syscall].monitored=0;
+	table[syscall].f=NULL;
+ 	spin_lock(&pidlist_lock);
+ 	destroy_list(syscall);
+ 	spin_unlock(&pidlist_lock);
  	spin_unlock(&calltable_lock);
+ 	set_addr_ro((unsigned long)sys_call_table);//set to read-only
  	return 0;
  }
 
@@ -404,28 +408,28 @@ break;
 	case REQUEST_START_MONITORING:
 	        if(table[syscall].intercepted==0)  //if syscall has not been intercepted
 					return -EINVAL;
-					if(pid==0)
+					if(pid==0)  //do special situation first
 					{
-						if(current_uid()!=0)
-							return -EPERM;
-					}else
+						if(current_uid()!=0){  //if we don't have root permissions
+								return -EPERM;
+						 }else{
+							 spin_lock(&pidlist_lock);
+								 destroy_list(syscall);//when pid=0,acutally there is no pid in the pid list.
+								table[syscall].monitored=2;
+								spin_unlock(&pidlist_lock);
+								 return 0;
+						 }
+					}
+					else
 					{
 						if(pid_task(find_vpid(pid), PIDTYPE_PID)==NULL)
 						return -EINVAL;
 						isOwned=check_pid_from_list(pid,current->pid); //0-owned
 						if(current_uid()!=0&&isOwned!=0)
 							return -EPERM;
-					}
-      isMonitored=check_pid_monitored(syscall,pid);//1-monitored;0-not monitored
-			if(isMonitored==1){
-				return -EBUSY;
-			}
-	    if(pid==0){
-				spin_lock(&pidlist_lock);
-				table[syscall].monitored=2;
-				 spin_unlock(&pidlist_lock);
-				return 0;
-			}else{
+					isMonitored=check_pid_monitored(syscall,pid);//1-monitored;0-not monitored
+					if(isMonitored==1)
+					return -EBUSY;
 			spin_lock(&pidlist_lock);
       isAdded=add_pid_sysc(pid,syscall);
 			if(isAdded!=0){
@@ -433,8 +437,11 @@ break;
 				return -ENOMEM;
 			}else{
 			table[syscall].monitored=1;
-			 spin_unlock(&pidlist_lock);}
+			 spin_unlock(&pidlist_lock);
+		 return 0;
+	 }
 		 }
+
   break;
 
 	case REQUEST_STOP_MONITORING:
@@ -465,6 +472,7 @@ break;
 	spin_lock(&pidlist_lock);
 	del_pid_sysc(pid,syscall);
 	 spin_unlock(&pidlist_lock);
+	 return 0;
  }
 break;
 
