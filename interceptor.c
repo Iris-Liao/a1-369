@@ -466,6 +466,7 @@ break;
 	if(pid==0){
 		spin_lock(&pidlist_lock);
 		destroy_list(syscall);//case: pid 1,2,3,....0
+		table[syscall].monitored=0;
 		 spin_unlock(&pidlist_lock);
 		return 0;
 	}else{
