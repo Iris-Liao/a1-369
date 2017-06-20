@@ -449,8 +449,15 @@ break;
 	return -EINVAL;
 	if(pid==0)
 	{
-		if(current_uid()!=0)
+		if(current_uid()!=0){
 			return -EPERM;
+		}else{
+			spin_lock(&pidlist_lock);
+			destroy_list(syscall);//case: pid 1,2,3,....0
+			table[syscall].monitored=0;
+			 spin_unlock(&pidlist_lock);
+			return 0;
+		}
 	}else
 	{
 		if(pid_task(find_vpid(pid), PIDTYPE_PID)==NULL)
@@ -458,23 +465,14 @@ break;
 		isOwned=check_pid_from_list(pid,current->pid); //0-owned
 		if(current_uid()!=0&&isOwned!=0)
 			return -EPERM;
+		isMonitored=check_pid_monitored(syscall,pid);
+			if(isMonitored==0){
+				return -EINVAL;}
+				spin_lock(&pidlist_lock);
+				del_pid_sysc(pid,syscall);
+				 spin_unlock(&pidlist_lock);
+				 return 0;
 	}
-	isMonitored=check_pid_monitored(syscall,pid);
-	if(isMonitored==0){
-		return -EINVAL;
-	}
-	if(pid==0){
-		spin_lock(&pidlist_lock);
-		destroy_list(syscall);//case: pid 1,2,3,....0
-		table[syscall].monitored=0;
-		 spin_unlock(&pidlist_lock);
-		return 0;
-	}else{
-	spin_lock(&pidlist_lock);
-	del_pid_sysc(pid,syscall);
-	 spin_unlock(&pidlist_lock);
-	 return 0;
- }
 break;
 
 }//switch end
